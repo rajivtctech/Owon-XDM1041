@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XDM1041 — Live Reading</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=IBM+Plex+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:           #0a0a0a;
+    --panel:        #111111;
+    --panel-border: #222222;
+    --digit:        #ffb300;
+    --digit-dim:    #3d2a00;
+    --digit-glow:   #ffb30066;
+    --unit:         #e0a000;
+    --mode:         #888888;
+    --accent:       #ffb300;
+    --accent-dim:   #664700;
+    --ok:           #4caf50;
+    --err:          #ef5350;
+    --muted:        #555555;
+    --btn-bg:       #181818;
+    --btn-border:   #333333;
+    --btn-text:     #999999;
+    --btn-hover-bg: #252525;
+    --btn-active-bg:#ffb300;
+    --btn-active-tx:#0a0a0a;
+    --scanline:     rgba(255,255,255,0.012);
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: #ccc;
+    font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+    user-select: none;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px,
+      var(--scanline) 2px, var(--scanline) 4px
+    );
+    z-index: 1000;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 0;
+    position: relative;
+  }
+
+  /* ---- Display area (grows to fill space above the panel) ---- */
+  .display-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2vmin;
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ---- Top bar ---- */
+  .topbar {
+    position: absolute;
+    top: 2vmin; left: 3vmin; right: 3vmin;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: clamp(0.7rem, 1.4vmin, 1rem);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .instrument-label { color: var(--muted); font-weight: 300; }
+  .instrument-label strong { color: #999; font-weight: 500; }
+
+  .status-dot {
+    width: 0.6em; height: 0.6em; border-radius: 50%;
+    display: inline-block; margin-right: 0.5em;
+    background: var(--err); box-shadow: 0 0 6px var(--err);
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  .status-dot.connected {
+    background: var(--ok); box-shadow: 0 0 6px var(--ok);
+  }
+  .status-text { color: var(--muted); }
+
+  /* ---- Mode badge ---- */
+  .mode-badge {
+    font-size: clamp(1rem, 3.5vmin, 2.4rem);
+    font-weight: 700; color: var(--mode);
+    letter-spacing: 0.15em; text-transform: uppercase;
+    margin-bottom: 1vmin; min-height: 1.2em;
+    transition: color 0.3s;
+  }
+
+  /* ---- Main reading ---- */
+  .reading-row {
+    display: flex; align-items: baseline;
+    gap: 2vmin; line-height: 1;
+  }
+
+  .value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(4rem, 15vmin, 14rem);
+    font-weight: 700; color: var(--digit);
+    text-shadow: 0 0 20px var(--digit-glow), 0 0 60px rgba(255,179,0,0.15);
+    letter-spacing: -0.02em; transition: color 0.15s; white-space: nowrap;
+  }
+  .value.stale { color: var(--digit-dim); text-shadow: none; }
+  .value.overload {
+    color: var(--err);
+    text-shadow: 0 0 30px rgba(239,83,80,0.4);
+    animation: blink-ol 0.8s step-end infinite;
+  }
+  @keyframes blink-ol { 50% { opacity: 0.3; } }
+
+  .unit {
+    font-size: clamp(1.6rem, 6vmin, 5rem);
+    font-weight: 500; color: var(--unit);
+    text-shadow: 0 0 12px rgba(224,160,0,0.2);
+    letter-spacing: 0.04em; min-width: 3ch;
+  }
+
+  /* ---- Stats row ---- */
+  .stats-row {
+    margin-top: 3vmin; display: flex; gap: 5vmin;
+    font-size: clamp(0.65rem, 1.8vmin, 1.2rem);
+    color: var(--muted); letter-spacing: 0.06em;
+  }
+  .stat-item { display: flex; flex-direction: column; align-items: center; gap: 0.3em; }
+  .stat-label { font-size: 0.75em; text-transform: uppercase; color: #444; }
+  .stat-value { font-family: 'JetBrains Mono', monospace; color: #777; }
+
+  /* ============================================================
+     CONTROL PANEL  –  permanently visible at bottom
+     ============================================================ */
+  .control-panel {
+    flex-shrink: 0;
+    position: relative;
+    z-index: 200;
+    background: var(--panel);
+    border-top: 1px solid var(--panel-border);
+    padding: 1.5vmin 3vmin;
+    display: flex; flex-direction: column; align-items: center; gap: 1vmin;
+  }
+
+  .ctrl-row {
+    display: flex; flex-wrap: wrap; gap: 0.6vmin;
+    justify-content: center; align-items: center;
+  }
+  .ctrl-row-label {
+    font-size: clamp(0.55rem, 1.1vmin, 0.75rem);
+    color: #444; text-transform: uppercase; letter-spacing: 0.12em;
+    margin-right: 0.8vmin; min-width: 5ch; text-align: right;
+  }
+
+  .ctrl-btn {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: clamp(0.6rem, 1.3vmin, 0.9rem); font-weight: 500;
+    color: var(--btn-text); background: var(--btn-bg);
+    border: 1px solid var(--btn-border); border-radius: 4px;
+    padding: 0.5em 1em; cursor: pointer;
+    transition: all 0.15s; letter-spacing: 0.04em;
+    white-space: nowrap; outline: none;
+  }
+  .ctrl-btn:hover { background: var(--btn-hover-bg); border-color: #555; color: #ccc; }
+  .ctrl-btn:active { transform: scale(0.96); }
+  .ctrl-btn.active {
+    background: var(--btn-active-bg); color: var(--btn-active-tx);
+    border-color: var(--btn-active-bg); font-weight: 700;
+    box-shadow: 0 0 10px var(--digit-glow);
+  }
+  .ctrl-btn.toggle { min-width: 5.5em; text-align: center; }
+
+  .ctrl-sep { width: 1px; height: 1.8em; background: #333; margin: 0 0.4vmin; }
+
+  .ctrl-btn.flash-ok  { animation: flashOk  0.4s ease-out; }
+  .ctrl-btn.flash-err  { animation: flashErr 0.4s ease-out; }
+  @keyframes flashOk  { 0% { box-shadow: 0 0 12px var(--ok);  border-color: var(--ok);  } 100% { box-shadow: none; } }
+  @keyframes flashErr { 0% { box-shadow: 0 0 12px var(--err); border-color: var(--err); } 100% { box-shadow: none; } }
+
+  /* ---- Bottom bar ---- */
+  .bottombar {
+    flex-shrink: 0;
+    position: relative;
+    z-index: 200;
+    padding: 0.5vmin 3vmin;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: clamp(0.6rem, 1.2vmin, 0.85rem); color: #444;
+    background: var(--panel);
+  }
+
+  .help-text span {
+    color: #555; border: 1px solid #333; border-radius: 3px;
+    padding: 0.1em 0.4em; margin-right: 0.3em; font-size: 0.9em;
+  }
+
+  /* ---- Error overlay ---- */
+  .error-msg {
+    position: absolute; bottom: 2vmin;
+    font-size: clamp(0.7rem, 1.5vmin, 1rem);
+    color: var(--err); opacity: 0; transition: opacity 0.3s;
+    text-align: center; z-index: 50;
+  }
+  .error-msg.visible { opacity: 1; }
+
+  /* ---- Colour themes ---- */
+  body.theme-green {
+    --digit:#00e676;--digit-dim:#003d1a;--digit-glow:#00e67666;
+    --unit:#00c853;--accent:#00e676;--accent-dim:#005a2b;
+    --btn-active-bg:#00e676;--btn-active-tx:#0a0a0a;
+  }
+  body.theme-cyan {
+    --digit:#00e5ff;--digit-dim:#003844;--digit-glow:#00e5ff55;
+    --unit:#00b8d4;--accent:#00e5ff;--accent-dim:#005566;
+    --btn-active-bg:#00e5ff;--btn-active-tx:#0a0a0a;
+  }
+  body.theme-white {
+    --digit:#f0f0f0;--digit-dim:#2a2a2a;--digit-glow:#ffffff33;
+    --unit:#cccccc;--accent:#f0f0f0;--accent-dim:#555555;
+    --btn-active-bg:#f0f0f0;--btn-active-tx:#0a0a0a;
+  }
+  body.theme-red {
+    --digit:#ff5252;--digit-dim:#3d0000;--digit-glow:#ff525255;
+    --unit:#ef5350;--accent:#ff5252;--accent-dim:#662020;
+    --btn-active-bg:#ff5252;--btn-active-tx:#0a0a0a;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <div class="display-area">
+
+    <div class="topbar">
+      <div class="instrument-label"><strong>OWON</strong>&ensp;XDM1041</div>
+      <div class="status">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">Connecting …</span>
+      </div>
+    </div>
+
+    <div class="mode-badge" id="modeBadge">——</div>
+
+    <div class="reading-row">
+      <div class="value stale" id="valueEl">——.————</div>
+      <div class="unit" id="unitEl"></div>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-item">
+        <span class="stat-label">Min</span>
+        <span class="stat-value" id="statMin">—</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Max</span>
+        <span class="stat-value" id="statMax">—</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Δ</span>
+        <span class="stat-value" id="statDelta">—</span>
+      </div>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+  </div>
+
+  <!-- ============================================================
+       CONTROL PANEL
+       ============================================================ -->
+  <div class="control-panel" id="controlPanel">
+
+    <!-- Row 1: Measurement function -->
+    <div class="ctrl-row" id="funcRow">
+      <span class="ctrl-row-label">Func</span>
+      <button class="ctrl-btn" data-func="VOLT"    >DC V</button>
+      <button class="ctrl-btn" data-func="VOLT:AC" >AC V</button>
+      <div class="ctrl-sep"></div>
+      <button class="ctrl-btn" data-func="CURR"    >DC A</button>
+      <button class="ctrl-btn" data-func="CURR:AC" >AC A</button>
+      <div class="ctrl-sep"></div>
+      <button class="ctrl-btn" data-func="RES"     >Ω</button>
+      <button class="ctrl-btn" data-func="CAP"     >Cap</button>
+      <button class="ctrl-btn" data-func="FREQ"    >Freq</button>
+      <div class="ctrl-sep"></div>
+      <button class="ctrl-btn" data-func="TEMP"    >Temp</button>
+      <button class="ctrl-btn" data-func="DIOD"    >Diode</button>
+      <button class="ctrl-btn" data-func="CONT"    >Cont</button>
+    </div>
+
+    <!-- Row 2: Range, Speed, Reset -->
+    <div class="ctrl-row">
+      <span class="ctrl-row-label">Range</span>
+      <button class="ctrl-btn toggle active" id="btnRangeAuto">Auto</button>
+      <button class="ctrl-btn toggle" id="btnRangeUp">Range ▲</button>
+      <button class="ctrl-btn toggle" id="btnRangeDn">Range ▼</button>
+      <div class="ctrl-sep"></div>
+      <span class="ctrl-row-label">Speed</span>
+      <button class="ctrl-btn toggle" data-speed="F">Fast</button>
+      <button class="ctrl-btn toggle" data-speed="M">Med</button>
+      <button class="ctrl-btn toggle" data-speed="S">Slow</button>
+      <div class="ctrl-sep"></div>
+      <button class="ctrl-btn" id="btnReset" style="color:var(--err)">*RST</button>
+    </div>
+  </div>
+
+  <div class="bottombar">
+    <div class="help-text">
+      <span>F</span> Fullscreen &ensp;
+      <span>C</span> Colour &ensp;
+      <span>R</span> Reset min/max
+    </div>
+    <div id="rateInfo"></div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const WS_URL = `ws://${location.hostname || 'localhost'}:8765`;
+  const RECONNECT_DELAY = 2000;
+
+  // DOM
+  const valueEl      = document.getElementById("valueEl");
+  const unitEl       = document.getElementById("unitEl");
+  const modeBadge    = document.getElementById("modeBadge");
+  const statusDot    = document.getElementById("statusDot");
+  const statusTxt    = document.getElementById("statusText");
+  const errorMsg     = document.getElementById("errorMsg");
+  const statMin      = document.getElementById("statMin");
+  const statMax      = document.getElementById("statMax");
+  const statDelta    = document.getElementById("statDelta");
+  const rateInfo     = document.getElementById("rateInfo");
+  const controlPanel = document.getElementById("controlPanel");
+  const funcRow      = document.getElementById("funcRow");
+  const btnRangeAuto = document.getElementById("btnRangeAuto");
+  const btnRangeUp   = document.getElementById("btnRangeUp");
+  const btnRangeDn   = document.getElementById("btnRangeDn");
+  const btnReset     = document.getElementById("btnReset");
+
+  // State
+  let ws = null, lastOkTime = 0;
+  let sampleCount = 0, sampleT0 = performance.now();
+  let minVal = Infinity, maxVal = -Infinity, currentUnit = "";
+  let currentFunc = "", rangeIsAuto = true, currentSpeed = "F";
+  let currentRangeIdx = -1;
+  let lastClickedBtn = null;
+
+  const THEMES = ["", "theme-green", "theme-cyan", "theme-white", "theme-red"];
+  let themeIdx = 0;
+
+  const RANGE_ROOTS = {
+    "VOLT":"VOLT","VOLT:DC":"VOLT","VOLT:AC":"VOLT:AC",
+    "CURR":"CURR","CURR:DC":"CURR","CURR:AC":"CURR:AC",
+    "RES":"RES","FRES":"FRES","CAP":"CAP",
+  };
+  const RANGE_VALUES = {
+    "VOLT":    [0.5, 5, 50, 500, 1000],
+    "VOLT:AC": [0.5, 5, 50, 500, 750],
+    "CURR":    [0.0005, 0.005, 0.05, 0.5, 5, 10],
+    "CURR:AC": [0.0005, 0.005, 0.05, 0.5, 5, 10],
+    "RES":     [500, 5000, 50000, 500000, 5000000, 50000000],
+    "FRES":    [500, 5000, 50000],
+    "CAP":     [5e-9, 5e-8, 5e-7, 5e-6, 5e-5, 5e-4, 5e-3, 5e-2],
+  };
+
+  // Label-to-SCPI reverse map
+  const LABEL_TO_FUNC = {
+    "DC V":"VOLT","AC V":"VOLT:AC","DC A":"CURR","AC A":"CURR:AC",
+    "Ω":"RES","4W Ω":"FRES","Cap":"CAP","Freq":"FREQ",
+    "Temp":"TEMP","Diode":"DIOD","Cont":"CONT",
+  };
+
+  // ---- Helpers ----
+  function setStatus(ok, text) {
+    statusDot.classList.toggle("connected", ok);
+    statusTxt.textContent = text;
+  }
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.classList.toggle("visible", !!msg);
+  }
+  function resetStats() {
+    minVal = Infinity; maxVal = -Infinity; currentUnit = "";
+    statMin.textContent = statMax.textContent = statDelta.textContent = "—";
+  }
+  function formatStat(v, unit) {
+    if (!isFinite(v)) return "—";
+    const abs = Math.abs(v);
+    const px = [[1e12,"T"],[1e9,"G"],[1e6,"M"],[1e3,"k"],[1,""],[1e-3,"m"],[1e-6,"μ"],[1e-9,"n"],[1e-12,"p"]];
+    for (const [thr, pfx] of px) {
+      if (abs >= thr || thr === 1e-12) {
+        const s = v / thr;
+        const d = abs >= thr*1000 ? 1 : abs >= thr*100 ? 2 : abs >= thr*10 ? 3 : 4;
+        return s.toFixed(d) + " " + pfx + unit;
+      }
+    }
+    return v.toExponential(3);
+  }
+  function baseUnit(u) {
+    if (!u) return "";
+    for (const p of ["T","G","M","k","m","μ","n","p"])
+      if (u.startsWith(p) && u.length > p.length) return u.slice(p.length);
+    return u;
+  }
+
+  // ---- WebSocket send helpers ----
+  function sendSCPI(cmd, btn) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    lastClickedBtn = btn || null;
+    ws.send(JSON.stringify({ type: "scpi", cmd }));
+  }
+  function queryState() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "query_state" }));
+  }
+  function flashButton(btn, ok) {
+    if (!btn) return;
+    const cls = ok ? "flash-ok" : "flash-err";
+    btn.classList.remove("flash-ok", "flash-err");
+    void btn.offsetWidth;
+    btn.classList.add(cls);
+    setTimeout(() => btn.classList.remove(cls), 450);
+  }
+
+  // ---- UI highlight updaters ----
+  function updateFuncHighlight(func) {
+    if (func === currentFunc) return;
+    currentFunc = func;
+    funcRow.querySelectorAll(".ctrl-btn[data-func]").forEach(b =>
+      b.classList.toggle("active", b.dataset.func === func));
+    currentRangeIdx = -1;
+  }
+  function updateSpeedHighlight(speed) {
+    if (!speed) return;
+    currentSpeed = speed.toUpperCase();
+    document.querySelectorAll(".ctrl-btn[data-speed]").forEach(b =>
+      b.classList.toggle("active", b.dataset.speed === currentSpeed));
+  }
+  function updateRangeHighlight(auto) {
+    rangeIsAuto = auto;
+    btnRangeAuto.classList.toggle("active", !!auto);
+  }
+
+  // ---- Control panel event handlers ----
+
+  // Function buttons
+  funcRow.addEventListener("click", (e) => {
+    const btn = e.target.closest(".ctrl-btn[data-func]");
+    if (!btn) return;
+    sendSCPI(`FUNC ${btn.dataset.func}`, btn);
+    updateFuncHighlight(btn.dataset.func);
+    resetStats();
+  });
+
+  // Range Auto
+  btnRangeAuto.addEventListener("click", function () {
+    const root = RANGE_ROOTS[currentFunc];
+    if (!root) return;
+    sendSCPI(`${root}:RANGE:AUTO ON`, this);
+    rangeIsAuto = true; currentRangeIdx = -1;
+    updateRangeHighlight(true);
+  });
+
+  // Range Up
+  btnRangeUp.addEventListener("click", function () {
+    const root = RANGE_ROOTS[currentFunc];
+    const ranges = RANGE_VALUES[currentFunc];
+    if (!root || !ranges) return;
+    if (rangeIsAuto || currentRangeIdx < 0) currentRangeIdx = 0;
+    else if (currentRangeIdx < ranges.length - 1) currentRangeIdx++;
+    rangeIsAuto = false; updateRangeHighlight(false);
+    sendSCPI(`${root}:RANGE ${ranges[currentRangeIdx]}`, this);
+  });
+
+  // Range Down
+  btnRangeDn.addEventListener("click", function () {
+    const root = RANGE_ROOTS[currentFunc];
+    const ranges = RANGE_VALUES[currentFunc];
+    if (!root || !ranges) return;
+    if (rangeIsAuto || currentRangeIdx < 0) currentRangeIdx = ranges.length - 1;
+    else if (currentRangeIdx > 0) currentRangeIdx--;
+    rangeIsAuto = false; updateRangeHighlight(false);
+    sendSCPI(`${root}:RANGE ${ranges[currentRangeIdx]}`, this);
+  });
+
+  // Speed buttons
+  document.querySelectorAll(".ctrl-btn[data-speed]").forEach(btn => {
+    btn.addEventListener("click", function () {
+      sendSCPI(`RATE ${this.dataset.speed}`, this);
+      updateSpeedHighlight(this.dataset.speed);
+    });
+  });
+
+  // Reset
+  btnReset.addEventListener("click", function () {
+    if (!confirm("Reset the meter to factory defaults?")) return;
+    sendSCPI("*RST", this);
+    resetStats(); currentRangeIdx = -1;
+    setTimeout(queryState, 500);
+  });
+
+  // ---- WebSocket connection ----
+  function connect() {
+    setStatus(false, "Connecting …");
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      setStatus(true, "Connected");
+      showError("");
+      sampleCount = 0; sampleT0 = performance.now();
+      setTimeout(queryState, 300);
+    };
+
+    ws.onclose = () => {
+      setStatus(false, "Disconnected");
+      valueEl.classList.add("stale");
+      setTimeout(connect, RECONNECT_DELAY);
+    };
+
+    ws.onerror = () => {
+      showError("WebSocket error — is xdm1041_server.py running?");
+    };
+
+    ws.onmessage = (evt) => {
+      let data;
+      try { data = JSON.parse(evt.data); } catch { return; }
+
+      // ---- Command response ----
+      if (data.type === "cmd_resp") {
+        flashButton(lastClickedBtn, data.ok);
+        lastClickedBtn = null;
+        if (!data.ok) {
+          showError(data.error || "Command failed");
+          setTimeout(() => showError(""), 3000);
+        } else {
+          // Immediately refresh state after any successful command
+          setTimeout(queryState, 200);
+        }
+        return;
+      }
+
+      // ---- State response ----
+      if (data.type === "state" && data.ok) {
+        if (data.range_auto !== null && data.range_auto !== undefined)
+          updateRangeHighlight(data.range_auto);
+        if (data.speed) updateSpeedHighlight(data.speed);
+        return;
+      }
+
+      // ---- Measurement reading ----
+      if (!data.ok) {
+        showError(data.error || "Read error");
+        valueEl.classList.add("stale");
+        return;
+      }
+
+      showError("");
+      lastOkTime = performance.now();
+      valueEl.classList.remove("stale", "overload");
+
+      // Overload
+      if (Math.abs(data.value) > 1e30) {
+        valueEl.textContent = "OL";
+        valueEl.classList.add("overload");
+        unitEl.textContent = "";
+        modeBadge.textContent = data.mode || "——";
+        return;
+      }
+
+      // Main display
+      valueEl.textContent  = data.display;
+      unitEl.textContent   = data.unit;
+      modeBadge.textContent = data.mode || "";
+
+      // Highlight active function from meter's reported mode
+      if (data.raw_func) {
+        updateFuncHighlight(data.raw_func);
+      } else if (data.mode) {
+        const f = LABEL_TO_FUNC[data.mode];
+        if (f) updateFuncHighlight(f);
+      }
+
+      // Min/max tracking
+      const bu = baseUnit(data.unit);
+      if (bu !== currentUnit) { resetStats(); currentUnit = bu; }
+      if (data.value < minVal) minVal = data.value;
+      if (data.value > maxVal) maxVal = data.value;
+      statMin.textContent   = formatStat(minVal, bu);
+      statMax.textContent   = formatStat(maxVal, bu);
+      statDelta.textContent = formatStat(maxVal - minVal, bu);
+
+      // Readings/sec
+      sampleCount++;
+      const elapsed = (performance.now() - sampleT0) / 1000;
+      if (elapsed > 2) {
+        rateInfo.textContent = (sampleCount / elapsed).toFixed(1) + " rdg/s";
+        sampleCount = 0; sampleT0 = performance.now();
+      }
+    };
+  }
+
+  connect();
+
+  // Periodically refresh range/speed state
+  setInterval(queryState, 1500);
+
+  // Stale detection
+  setInterval(() => {
+    if (lastOkTime && (performance.now() - lastOkTime > 2000))
+      valueEl.classList.add("stale");
+  }, 500);
+
+  // ---- Keyboard shortcuts ----
+  document.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === "f") {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+      else document.exitFullscreen();
+    } else if (k === "c") {
+      document.body.classList.remove(THEMES[themeIdx]);
+      themeIdx = (themeIdx + 1) % THEMES.length;
+      if (THEMES[themeIdx]) document.body.classList.add(THEMES[themeIdx]);
+    } else if (k === "r") {
+      resetStats();
+    }
+  });
+
+  // ---- Cursor auto-hide ----
+  let cursorTimer;
+  document.addEventListener("mousemove", () => {
+    document.body.style.cursor = "default";
+    clearTimeout(cursorTimer);
+    cursorTimer = setTimeout(() => {
+      document.body.style.cursor = "none";
+    }, 3000);
+  });
+
+})();
+</script>
+</body>
+</html>

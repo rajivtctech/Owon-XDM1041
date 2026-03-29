@@ -1,0 +1,14 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Version=1.5
+Type=Application
+Name=XDM1041 Display
+GenericName=Multimeter Display
+Comment=Full-screen large-digit display for the Owon XDM1041 bench multimeter
+Exec=bash -c "$HOME/xdm1041/xdm1041_launcher.sh"
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;Electronics;Engineering;
+Keywords=multimeter;SCPI;OWON;XDM1041;measurement;
+StartupNotify=true
+StartupWMClass=xdm1041
